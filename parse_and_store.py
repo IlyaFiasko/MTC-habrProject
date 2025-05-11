@@ -9,6 +9,42 @@ from db_utils import (
 from articles_parser import fetch_html, parse_article
 from comments_parser import fetch_comments
 
+from transformers import AutoModelForCausalLM, LlamaTokenizer, AutoTokenizer, AutoModelForSequenceClassification
+import torch
+import torch.nn.functional as F
+
+# Суммаризация текста (YandexGPT)
+MODEL_NAME_SUM = "yandex/YandexGPT-5-Lite-8B-instruct"
+tokenizer_sum = LlamaTokenizer(vocab_file="/tokenizer.model")
+model_sum = AutoModelForCausalLM.from_pretrained(
+    MODEL_NAME_SUM,
+    device_map="cuda",
+    torch_dtype="auto",
+    trust_remote_code=True
+)
+
+def generate_summary(text: str) -> str:
+    prompt = f"<s>[INST] Кратко перескажи статью: {text} [/INST]"
+    input_ids = tokenizer_sum(prompt, return_tensors="pt").input_ids.to("cuda")
+    outputs = model_sum.generate(input_ids, max_new_tokens=512)
+    return tokenizer_sum.decode(outputs[0][input_ids.shape[1]:], skip_special_tokens=True)
+
+# Классификация комментариев (RuBERT)
+MODEL_NAME_CLASS = "blanchefort/rubert-base-cased-sentiment"
+tokenizer_cls = AutoTokenizer.from_pretrained(MODEL_NAME_CLASS)
+model_cls = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME_CLASS)
+
+labels_map = {0: "negative", 1: "neutral", 2: "positive"}
+
+def classify_comment(text: str) -> str:
+    inputs = tokenizer_cls(text, return_tensors="pt", truncation=True, padding=True)
+    with torch.no_grad():
+        outputs = model_cls(**inputs)
+    probs = F.softmax(outputs.logits, dim=1)
+    predicted_class = torch.argmax(probs, dim=1).item()
+    return labels_map[predicted_class]
+
+
 def main(url: str):
     # Проверяем, есть ли статья
     article_row = get_article_by_url(url)
@@ -18,7 +54,7 @@ def main(url: str):
         html = fetch_html(url)
         parsed = parse_article(html)
         title, content = parsed['title'], parsed['text']
-        summary = content[:200]  # можно использовать генератор резюме позже
+        summary = generate_summary(content)
         insert_article(url, title, content, summary)
         article_id = get_article_id(url)
     else:
@@ -32,11 +68,10 @@ def main(url: str):
 
     # Загружаем и записываем комментарии
     comments = fetch_comments(url)
-    comments_with_sentiment = [(c, 'neutral') for c in comments]
+    comments_with_sentiment = [(c, classify_comment(c)) for c in comments]
     insert_comments(article_id, comments_with_sentiment)
     print(f"Сохранено комментариев: {len(comments)}")
 
 if __name__ == "__main__":
-    urls = ['https://habr.com/ru/companies/ru_mts/articles/906114/', 'https://habr.com/ru/companies/ru_mts/articles/906884/', 'https://habr.com/ru/companies/ru_mts/articles/905614/', 'https://habr.com/ru/companies/ru_mts/articles/904330/', 'https://habr.com/ru/companies/ru_mts/articles/904016/', 'https://habr.com/ru/companies/oleg-bunin/articles/902932/', 'https://habr.com/ru/companies/ru_mts/articles/903142/', 'https://habr.com/ru/companies/ru_mts/articles/902806/', 'https://habr.com/ru/companies/ru_mts/articles/902244/', 'https://habr.com/ru/companies/ru_mts/articles/902106/', 'https://habr.com/ru/companies/ru_mts/articles/901992/', 'https://habr.com/ru/companies/ru_mts/articles/901266/', 'https://habr.com/ru/companies/ru_mts/articles/900596/', 'https://habr.com/ru/companies/ru_mts/articles/900288/', 'https://habr.com/ru/companies/ru_mts/articles/899964/', 'https://habr.com/ru/companies/ru_mts/articles/899904/']
-    for url in urls:
-        main(url)
+    url = ''
+    main(url)
