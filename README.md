@@ -21,3 +21,6 @@
 git clone https://github.com/IlyaFiasko/MTC-habrProject.git
 cd MTC-habrProject
 pip install -r requirements.txt
+
+### Запуск бота
+python bot.py
